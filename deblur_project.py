@@ -35,9 +35,6 @@ def apply_blur(image, type, par):
     elif type == 'box':
         K_hat = np.sinc(par*Wx/N) * np.sinc(par*Wy/N)
 
-    else:
-        print("INVALID BLUR TYPE")
-
     K_hat = fft.ifftshift(K_hat)
     #compute g = K * f_hat 
     f_hat = fft.fft2(image)
@@ -95,69 +92,78 @@ def tikh_filter(penalty, mu, K_hat, im):
     return fmu, Rmu
 
 def spectral_window(Om, K_hat, im):
-
-    valid_mask = np.abs(K_hat) > 1e-5
+    #transform the image to frequency domain
     g_hat = fft.fft2(im)
+    #prepare the frequency grid
     X = np.linspace(-1*N//2, N//2-1, num=N)
     Y = np.linspace(-1*N//2, N//2-1, num=N)
     Wx, Wy = np.meshgrid(X, Y)
     W = np.sqrt(Wx**2 + Wy**2) 
+    #mask out very high frequencies
     W_Om = np.where(W < Om, 1, 0)
     W_Om = fft.ifftshift(W_Om)
-    f_Om_hat = W_Om * g_hat / K_hat
+    #apply the filter
+    R_om = W_Om / K_hat
+    f_Om_hat = R_om * g_hat
+    #reconstruct the image
     f_Om = np.real(fft.ifft2(f_Om_hat))
-    return f_Om
+    return f_Om, R_om
 
-def error(Rmu, K_hat, im_true, noise):
+def error(R, K_hat, im_true, noise):
     f_hat = fft.fft2(im_true)
     noise_hat = fft.fft2(noise)
 
     g_hat = K_hat * f_hat 
-    B = Rmu*g_hat - f_hat 
-    V = Rmu*noise_hat
+    B = R*g_hat - f_hat 
+    V = R*noise_hat
 
     bias = np.sum(np.abs(B)**2) / N**2
     variance = np.sum(np.abs(V)**2) / N**2
     return bias, variance
 
-def plot_images():
+def find_best(par):
+    if par == 'mu': 
+        PAR = np.logspace(-14, 0, num=80)
+    elif par == 'om':
+        PAR = np.linspace(N//5, N//2, num=20)
 
-    plt.figure(figsize=(36,24))
+    B=[]
+    V=[]
+    E=[]
 
-    plt.subplot(2, 3, 1)
-    plt.imshow(im, cmap='gray')
-    plt.title("original image")
+    for par in PAR:
+        if par == 'mu': _, R = tikh_filter('H2', par, K_hat, im_blurred_noised)
+        elif par == 'om': _, R = spectral_window(par, K_hat, im_blurred_noised)
+        bias, variance = error(R, K_hat, im, noise)
+        B.append(bias)
+        V.append(variance)
+        E.append(bias + variance)
+    argmin = np.argmin(E)
+    min= PAR[argmin]
+    return min, PAR, B, V, E
 
-    plt.subplot(2, 3, 2)
-    plt.imshow(im_blurred, cmap='gray')
-    plt.title("blurred image")
+def find_Om():
+    Om = np.linspace(N//5, N//2, num=10)
+    B=[]
+    V=[]
+    E=[]
+    for om in Om:
+        _, R = spectral_window(om, K_hat, im_blurred_noised)
+        bias, variance = error(R, K_hat, im, noise)
+        B.append(bias)
+        V.append(variance)
+        E.append(bias + variance)
+    argmin = np.argmin(E)
+    min= Om[argmin]
+    return min
 
-    plt.subplot(2, 3, 3)
-    plt.imshow(im_blurred_noised, cmap='gray')
-    plt.title("blurred image with noise")
-
-    plt.subplot(2, 3, 4)
-    plt.imshow(im_rec_naive, cmap='gray')
-    plt.title("the naive solution")
-
-    plt.subplot(2, 3, 5)
-    plt.imshow(im_rec_tikhL2, cmap='gray')
-    plt.title("the tikhonov solution (H2 penalty)")
-
-    #plt.subplot(2, 3, 6)
-    #plt.imshow(im_rec_spect, cmap='gray')
-    #plt.title("the spectral window solution")
-
-    plt.show()
-
-
-def plot_error():
-    Mu = np.logspace(-14, 0, num=80)
+def plot_error_old():
+    Mu = np.logspace(-9, -1, num=80)
     B=[]
     V=[]
     E=[]
     for mu in Mu:
-        im_rec_tikhL2, RmuL2 = tikh_filter('H2', mu, K_hat, im_blurred_noised)
+        _, RmuL2 = tikh_filter('H1', mu, K_hat, im_blurred_noised)
         bias, variance = error(RmuL2, K_hat, im, noise)
         B.append(bias)
         V.append(variance)
@@ -183,13 +189,63 @@ def plot_error():
     plt.show()
     return min
 
+def plot_error(PAR, B, V ,E):
+    plt.figure(figsize=(12,8))
+
+    plt.semilogx(PAR, B, label='Bias (Approximation Error)', color='steelblue')
+    plt.semilogx(PAR, V, label='Variance (Noise Error)', color='sandybrown')
+    plt.semilogx(PAR, E, label='Total Error', color='lightcoral', linestyle = '--', linewidth=2)
+
+    #plt.xscale('log') 
+    plt.legend() 
+
+    plt.xlabel('Regularization Parameter')
+    plt.ylabel('Error Value')
+    plt.title('Bias-Variance Trade-off')
+    plt.grid(True, which="both", ls="-", alpha=0.5) 
+
+    plt.show()
+
+def plot_images():
+
+    plt.figure(figsize=(36,24))
+
+    plt.subplot(2, 3, 1)
+    plt.imshow(im, cmap='gray')
+    plt.title("original image")
+
+    plt.subplot(2, 3, 2)
+    plt.imshow(im_blurred, cmap='gray')
+    plt.title("blurred image")
+
+    plt.subplot(2, 3, 3)
+    plt.imshow(im_blurred_noised, cmap='gray')
+    plt.title("blurred image with noise")
+
+    plt.subplot(2, 3, 4)
+    plt.imshow(im_rec_naive, cmap='gray')
+    plt.title("the naive solution")
+
+    plt.subplot(2, 3, 5)
+    plt.imshow(im_rec_tikh, cmap='gray')
+    #plt.title(f"window solution (Om = {best_om})")
+    plt.title("the tikhonov solution (H1 penalty)")
+
+    #plt.subplot(2, 3, 6)
+    #plt.imshow(im_rec_spect, cmap='gray')
+    #plt.title("the spectral window solution")
+
+    plt.show()
+
 
 im = downscale_im(gray('oupi.jpeg'))
 im_blurred, K_hat = apply_blur(im, 'lin_motion', 100)
 im_blurred_noised, noise = add_noise_snr(im_blurred, 30)
-min_err = plot_error()
+min_err, PAR, B, V, E = find_best('mu')
 im_rec_naive = naive_sol_safe(K_hat, im_blurred_noised)
-im_rec_tikhL2, RmuL2 = tikh_filter('H2', min_err, K_hat, im_blurred_noised)
-#im_rec_spect = spectral_window(50, K_hat, im_blurred_noised)
-
+im_rec_tikh, RmuL2 = tikh_filter('H1', min_err, K_hat, im_blurred_noised)
+#im_rec_spect, R_om = spectral_window(150, K_hat, im_blurred_noised)
+#best_om = find_Om()
+#im_rec_spect, _ = spectral_window(best_om, K_hat, im_blurred_noised)
+plot_error(PAR, B, V, E)
 plot_images()
